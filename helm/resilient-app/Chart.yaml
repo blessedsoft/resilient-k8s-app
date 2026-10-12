@@ -1,0 +1,6 @@
+apiVersion: v2
+name: resilient-app
+description: Resilient frontend, API, cache, and PostgreSQL application
+type: application
+version: 0.1.0
+appVersion: "1.0"

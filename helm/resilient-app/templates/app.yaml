@@ -1,0 +1,109 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: app-config, namespace: {{ .Release.Namespace }} }
+data:
+  BACKEND_URL: http://backend:8080
+  REDIS_HOST: redis
+  POSTGRES_HOST: postgres
+  POSTGRES_DB: {{ .Values.database.name | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: database-secret, namespace: {{ .Release.Namespace }} }
+type: Opaque
+stringData:
+  POSTGRES_USER: {{ .Values.database.user | quote }}
+  POSTGRES_PASSWORD: {{ .Values.database.password | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: frontend-nginx-config, namespace: {{ .Release.Namespace }} }
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      location = /health { return 200 'ok\n'; add_header Content-Type text/plain; }
+      location /api/ { proxy_pass http://backend:8080/; }
+      location / { return 200 'resilient frontend\n'; add_header Content-Type text/plain; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: frontend, namespace: {{ .Release.Namespace }} }
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  selector: { matchLabels: { app: frontend } }
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
+  template:
+    metadata: { labels: { app: frontend, tier: frontend } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: nginx
+          image: {{ .Values.frontend.image }}
+          ports: [{ name: http, containerPort: 8080 }]
+          resources: {{- toYaml .Values.resources.small | nindent 12 }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          volumeMounts:
+            - { name: config, mountPath: /etc/nginx/conf.d/default.conf, subPath: default.conf }
+            - { name: tmp, mountPath: /tmp }
+            - { name: cache, mountPath: /var/cache/nginx }
+            - { name: run, mountPath: /var/run }
+          readinessProbe: { httpGet: { path: /health, port: http }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: http }, periodSeconds: 10 }
+      volumes:
+        - { name: config, configMap: { name: frontend-nginx-config } }
+        - { name: tmp, emptyDir: {} }
+        - { name: cache, emptyDir: {} }
+        - { name: run, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: frontend, namespace: {{ .Release.Namespace }} }
+spec: { selector: { app: frontend }, ports: [{ name: http, port: 80, targetPort: http }] }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: frontend, namespace: {{ .Release.Namespace }} }
+spec: { minAvailable: 1, selector: { matchLabels: { app: frontend } } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: backend, namespace: {{ .Release.Namespace }} }
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector: { matchLabels: { app: backend } }
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
+  template:
+    metadata: { labels: { app: backend, tier: backend } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: api
+          image: {{ .Values.backend.image }}
+          args: ["-listen=:8080", "-text=backend ok"]
+          ports: [{ name: http, containerPort: 8080 }]
+          envFrom: [{ configMapRef: { name: app-config } }]
+          resources: {{- toYaml .Values.resources.small | nindent 12 }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          readinessProbe: { httpGet: { path: /, port: http }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /, port: http }, periodSeconds: 10 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: backend, namespace: {{ .Release.Namespace }} }
+spec: { selector: { app: backend }, ports: [{ name: http, port: 8080, targetPort: http }] }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: backend, namespace: {{ .Release.Namespace }} }
+spec: { minAvailable: 1, selector: { matchLabels: { app: backend } } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: backend, namespace: {{ .Release.Namespace }} }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: backend }
+  minReplicas: {{ .Values.backend.minReplicas }}
+  maxReplicas: {{ .Values.backend.maxReplicas }}
+  metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } } }]

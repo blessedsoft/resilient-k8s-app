@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: resilient-app
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: resilient-app
+data:
+  BACKEND_URL: http://backend:8080
+  REDIS_HOST: redis
+  POSTGRES_HOST: postgres
+  POSTGRES_DB: appdb
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: database-secret
+  namespace: resilient-app
+type: Opaque
+stringData:
+  POSTGRES_USER: appuser
+  POSTGRES_PASSWORD: change-me-in-production

@@ -1,0 +1,21 @@
+frontend:
+  replicas: 2
+  image: nginxinc/nginx-unprivileged:1.27-alpine
+backend:
+  replicas: 2
+  image: hashicorp/http-echo:1.0.0
+  minReplicas: 2
+  maxReplicas: 6
+redis:
+  image: redis:7-alpine
+postgres:
+  image: postgres:16-alpine
+  storage: 1Gi
+database:
+  user: appuser
+  password: change-me-in-production
+  name: appdb
+resources:
+  small:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 128Mi }
